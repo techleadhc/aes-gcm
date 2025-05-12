@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AES-GCM Encryption/Decryption</title> 
+</head>
+<body>
+  <h2>AES-GCM Encryption/Decryption</h2>
+  <form id="cryptoForm">
+    <label for="password">Master Key:</label>
+    <input type="text" id="password" name="password" value="" required><br><br>
+
+    <label for="iv">IV (Base64):</label>
+    <input type="text" id="iv" name="iv" value="" required>
+    <button type="button" onclick="generateRandomIV()">Generate Random IV</button><br><br>
+
+    <label for="inputText">Input Text:</label>
+    <textarea id="inputText" name="inputText" rows="5" cols="43" required></textarea><br><br>
+
+    <button type="button" onclick="encrypt()">Encrypt</button>
+    <button type="button" onclick="decrypt()">Decrypt</button>
+  </form>
+
+  <h3>Output:</h3>
+  <pre id="output"></pre>
+
+  <script>
+    function toHexString(byteArray) {
+      return Array.from(byteArray, byte => byte.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function deriveKey(password, salt) {
+      const encodedPassword = new TextEncoder().encode(password);
+      const baseKey = await window.crypto.subtle.importKey(
+        "raw",
+        encodedPassword,
+        { name: "PBKDF2" },
+        false,
+        ["deriveKey"],
+      );
+
+      const derivedKey = await window.crypto.subtle.deriveKey(
+        {
+          name: "PBKDF2",
+          salt,
+          iterations: 600000,
+          hash: "SHA-256",
+        },
+        baseKey,
+        { name: "AES-GCM", length: 256 },
+        true,
+        ["encrypt", "decrypt"],
+      );
+
+      return derivedKey;
+    }
+
+    function generateRandomIV() {
+      const randomIV = crypto.getRandomValues(new Uint8Array(12));
+      const base64IV = btoa(String.fromCharCode(...randomIV));
+      document.getElementById('iv').value = base64IV;
+    }
+
+    async function encrypt() {
+      try {
+        const password = document.getElementById('password').value;
+        const pwUtf8 = new TextEncoder().encode(password);
+        const ivElement = document.getElementById('iv');
+        const ivValue = ivElement.value.trim();
+
+        let iv;
+        if (ivValue && /^[A-Za-z0-9+/=]+$/.test(ivValue)) {
+          const decodedBase64 = atob(ivValue);
+          iv = new Uint8Array(decodedBase64.split('').map(char => char.charCodeAt(0)));
+        } else {
+          throw new Error('Invalid Base64 format.');
+        }
+
+        const data = document.getElementById('inputText').value;
+        const alg = { name: 'AES-GCM', iv: iv };
+        const extractable = false;
+        const key = await crypto.subtle.importKey('raw', pwUtf8, alg, extractable, ['encrypt']);
+
+        const encodedData = new TextEncoder().encode(data);
+
+        const encryptedContent = await window.crypto.subtle.encrypt(
+          {
+            name: "AES-GCM",
+            iv,
+            tagLength: 128,
+          },
+          key,
+          encodedData,
+        );
+
+        const authTag = encryptedContent.slice(encryptedContent.byteLength - 16);
+        const ciphertext = encryptedContent;
+
+        const output = {
+          ciphertext: btoa(String.fromCharCode(...new Uint8Array(ciphertext))),
+          ciphertext_hex: toHexString(new Uint8Array(ciphertext)),
+          iv: ivValue,
+          iv_hex: toHexString(iv),
+          authTag: btoa(String.fromCharCode(...new Uint8Array(authTag))),
+        };
+
+        document.getElementById('output').textContent = JSON.stringify(output, null, 2);
+      } catch (error) {
+        document.getElementById('output').textContent = `Encryption failed: ${error.message}`;
+      }
+    }
+
+    async function decrypt() {
+      try {
+        const password = document.getElementById('password').value;
+        const ivValue = document.getElementById('iv').value.trim();
+        const decodedBase64 = atob(ivValue);
+        const iv = new Uint8Array(decodedBase64.split('').map(char => char.charCodeAt(0)));
+
+        const ciphertextBase64 = document.getElementById('inputText').value.trim();
+        const ciphertext = Uint8Array.from(atob(ciphertextBase64), c => c.charCodeAt(0));
+        const authTag = ciphertext.slice(ciphertext.length - 16);
+        const encryptedContent = ciphertext.slice(0, ciphertext.length - 16);
+
+        const dataWithAuthTag = new Uint8Array(encryptedContent.length + authTag.length);
+        dataWithAuthTag.set(encryptedContent, 0);
+        dataWithAuthTag.set(authTag, encryptedContent.length);
+
+        const alg = { name: 'AES-GCM', iv: iv, tagLength: 128 };
+        const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), alg, false, ['decrypt']);
+
+        const decryptedContent = await window.crypto.subtle.decrypt(
+          alg,
+          key,
+          dataWithAuthTag,
+        );
+
+        document.getElementById('output').textContent = new TextDecoder().decode(decryptedContent);
+      } catch (error) {
+          console.error('Decryption error:', error.name, error.message, error.stack);
+          if (error.name === 'OperationError') {
+            document.getElementById('output').textContent = 'Decryption failed: Authentication failed, possibly due to an invalid IV or corrupted ciphertext.';
+          } else {
+            document.getElementById('output').textContent = `Decryption failed: ${error.message}`;
+          }
+      }
+    }
+  </script>
+</body>
+</html>
